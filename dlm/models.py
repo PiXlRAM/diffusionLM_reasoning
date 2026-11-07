@@ -63,6 +63,7 @@ class Scorer:
             "answer_suffix": ANSWER_SUFFIX,
             "end_marker": cfg["end_marker"],
             "dtype": "bfloat16",
+            "gpu": torch.cuda.get_device_name(device) if torch.cuda.is_available() else "cpu",
         }
         if self.kind == "diffusion":
             self.fingerprint.update(mask_id=LLADA_MASK_ID, canvas_len=LLADA_CANVAS_LEN)
@@ -90,16 +91,30 @@ class Scorer:
         logprobs = torch.log_softmax(logits, dim=-1)
         return logprobs[torch.arange(len(targets)), torch.tensor(targets)].tolist()
 
-    def _score_uncached(self, item, estimator):
+    def _slot_ids_and_positions(self, item):
         ctx = item.context()
         start, n = len(ctx), len(item.slots)
         if self.kind == "ar":
-            positions = list(range(start - 1, start + n - 1))
-            return self._slot_logprobs(ctx + item.slots, positions, item.slots), 1
-        if estimator == "joint":
-            ids = ctx + [LLADA_MASK_ID] * n
-            positions = list(range(start, start + n))
+            return ctx + item.slots, list(range(start - 1, start + n - 1))
+        return ctx + [LLADA_MASK_ID] * n, list(range(start, start + n))
+
+    @torch.inference_mode()
+    def slot_alternatives(self, item, k=5):
+        """Top-k tokens the model predicts at each answer slot (one-pass view), for diagnostics."""
+        ids, positions = self._slot_ids_and_positions(item)
+        logits = self.model(torch.tensor([ids], device=self.device)).logits[0, positions].float()
+        top = torch.softmax(logits, dim=-1).topk(k, dim=-1)
+        return [
+            [(self.tok.convert_ids_to_tokens(t), p) for t, p in zip(ids_row.tolist(), probs.tolist())]
+            for ids_row, probs in zip(top.indices, top.values)
+        ]
+
+    def _score_uncached(self, item, estimator):
+        if self.kind == "ar" or estimator == "joint":
+            ids, positions = self._slot_ids_and_positions(item)
             return self._slot_logprobs(ids, positions, item.slots), 1
+        ctx = item.context()
+        start, n = len(ctx), len(item.slots)
         per_slot = []
         for i in range(n):
             ids = ctx + item.slots[:i] + [LLADA_MASK_ID] * (n - i)

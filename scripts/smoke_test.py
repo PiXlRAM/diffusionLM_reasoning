@@ -4,6 +4,7 @@ Uses GSM8K train questions with their reference solutions, since model-written t
 """
 
 import argparse
+import math
 import time
 
 import torch
@@ -33,7 +34,11 @@ def run_model(name, examples, cache):
         wrong = str(int(answer) + 1) if answer.lstrip("-").isdigit() else answer + "0"
         item = scorer.build(question, reasoning, answer)
         wrong_item = scorer.build(question, reasoning, wrong)
-        print(f"\n[q{qid}] answer={answer} slots={scorer.tok.convert_ids_to_tokens(item.slots)}")
+        slot_tokens = scorer.tok.convert_ids_to_tokens(item.slots)
+        print(f"\n[q{qid}] answer={answer} slots={slot_tokens}")
+        for token, options in zip(slot_tokens, scorer.slot_alternatives(item)):
+            shown = ", ".join(f"{t!r}:{p:.3f}" for t, p in options)
+            print(f"    slot {token!r:14s} top5: {shown}")
 
         for est in estimators:
             scorer.cache = None
@@ -44,9 +49,10 @@ def run_model(name, examples, cache):
             per_pass = (time.time() - t) / first["passes"]
             second = scorer.score(item, est)
             bad = scorer.score(wrong_item, est)
+            per_slot = ", ".join(f"{math.exp(lp):.3f}" for lp in first["per_slot"])
             print(
                 f"  {est:10s} p(correct)={first['prob']:.4f} p({wrong})={bad['prob']:.4f} "
-                f"passes={first['passes']} sec/pass={per_pass:.3f}"
+                f"passes={first['passes']} sec/pass={per_pass:.3f} per-slot=[{per_slot}]"
             )
             ok &= check(0.0 < first["prob"] <= 1.0, f"{est}: probability in (0, 1]")
             ok &= check(first["prob"] > bad["prob"], f"{est}: correct answer beats {wrong}")
