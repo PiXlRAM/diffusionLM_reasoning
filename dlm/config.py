@@ -28,6 +28,6 @@ PROMPT_TEMPLATE = (
     "Then give the final answer as \\boxed{{number}}.\n\n{question}"
 )
 ANSWER_PREFIX = "\nThe final answer is \\boxed{"
-ANSWER_SUFFIX = "}"
+ANSWER_SUFFIX = "}."
 
 ESTIMATORS = ("joint", "sequential")

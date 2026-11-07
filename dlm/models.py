@@ -80,7 +80,7 @@ class Scorer:
             prompt=self.encode_prompt(question),
             reasoning=self.encode_text(reasoning),
             prefix=self.encode_text(ANSWER_PREFIX),
-            slots=self.encode_text(answer + ANSWER_SUFFIX) + [self.end_id],
+            slots=self.encode_text(answer) + self.encode_text(ANSWER_SUFFIX) + [self.end_id],
         )
 
     @torch.inference_mode()
