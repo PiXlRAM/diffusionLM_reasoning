@@ -1,0 +1,9 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0
+transformers==4.46.2
+accelerate
+datasets
+numpy
+pandas
+scipy
+huggingface_hub
