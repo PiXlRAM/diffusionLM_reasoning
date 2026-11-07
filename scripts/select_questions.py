@@ -5,10 +5,12 @@ import json
 from statistics import mean
 
 from dlm.config import MODELS, TRACES_DIR
+from dlm.generate import trace_path
 
 
 def load(model, split):
-    path = TRACES_DIR / f"{model}_{split}.jsonl"
+    path = trace_path(model, split)
+    print(f"reading {path}")
     return {r["qid"]: r for r in map(json.loads, path.open())}
 
 

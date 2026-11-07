@@ -11,7 +11,7 @@ import time
 
 from dlm.config import MODELS, TRACES_DIR
 from dlm.data import load_gsm8k, split_reference
-from dlm.generate import generate_trace
+from dlm.generate import generate_trace, trace_path
 from dlm.models import Scorer
 
 
@@ -33,7 +33,7 @@ def main():
     data = load_gsm8k(args.split)
     qids = sample_qids(len(data), args.n, args.seed)
     TRACES_DIR.mkdir(parents=True, exist_ok=True)
-    path = TRACES_DIR / f"{args.model}_{args.split}.jsonl"
+    path = trace_path(args.model, args.split)
     done = set()
     if path.exists():
         done = {json.loads(line)["qid"] for line in path.open()}

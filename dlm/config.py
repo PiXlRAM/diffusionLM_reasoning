@@ -23,14 +23,15 @@ MODELS = {
 
 LLADA_MASK_ID = 126336
 
-# Greedy decoding. Both models get the same 256-token budget; traces that hit it are dropped.
+# Greedy decoding. Both models get the same 384-token budget; traces that hit it are dropped.
 GENERATION = {
-    "llada": {"gen_length": 256, "steps": 256, "block_length": 32, "remasking": "low_confidence"},
-    "qwen": {"max_new_tokens": 256, "do_sample": False},
+    "llada": {"gen_length": 384, "steps": 384, "block_length": 32, "remasking": "low_confidence"},
+    "qwen": {"max_new_tokens": 384, "do_sample": False},
 }
 
 PROMPT_TEMPLATE = (
-    "Solve the following math problem step by step. "
+    "Solve the following math problem step by step. Write the reasoning in plain text, "
+    "one short sentence per step, without headings, bold text or LaTeX. "
     "Then give the final answer as \\boxed{{number}}.\n\n{question}"
 )
 ANSWER_PREFIX = "\nThe final answer is \\boxed{"

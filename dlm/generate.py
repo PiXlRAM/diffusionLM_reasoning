@@ -1,7 +1,16 @@
 import torch
 
-from dlm.config import GENERATION, LLADA_MASK_ID
+from dlm.cache import make_key
+from dlm.config import GENERATION, LLADA_MASK_ID, MODELS, PROMPT_TEMPLATE, TRACES_DIR
 from dlm.data import split_generation
+
+
+def trace_path(model, split):
+    """Trace file named by a hash of everything that shapes generation, so configs never mix."""
+    tag = make_key(
+        {"revision": MODELS[model]["revision"], "prompt": PROMPT_TEMPLATE, "gen": GENERATION[model]}
+    )[:8]
+    return TRACES_DIR / f"{model}_{split}_{tag}.jsonl"
 
 
 @torch.inference_mode()
