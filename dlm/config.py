@@ -4,6 +4,7 @@ from pathlib import Path
 PROJ = Path(os.environ.get("PROJ", Path(__file__).resolve().parents[1]))
 CACHE_DIR = PROJ / "cache"
 RESULTS_DIR = PROJ / "results"
+TRACES_DIR = RESULTS_DIR / "traces"
 
 MODELS = {
     "llada": {
@@ -21,7 +22,12 @@ MODELS = {
 }
 
 LLADA_MASK_ID = 126336
-LLADA_CANVAS_LEN = 256
+
+# Greedy decoding. Both models get the same 256-token budget; traces that hit it are dropped.
+GENERATION = {
+    "llada": {"gen_length": 256, "steps": 256, "block_length": 32, "remasking": "low_confidence"},
+    "qwen": {"max_new_tokens": 256, "do_sample": False},
+}
 
 PROMPT_TEMPLATE = (
     "Solve the following math problem step by step. "

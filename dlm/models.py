@@ -10,7 +10,7 @@ from dlm.config import (
     ANSWER_PREFIX,
     ANSWER_SUFFIX,
     ESTIMATORS,
-    LLADA_CANVAS_LEN,
+    GENERATION,
     LLADA_MASK_ID,
     MODELS,
     PROMPT_TEMPLATE,
@@ -65,8 +65,9 @@ class Scorer:
             "dtype": "bfloat16",
             "gpu": torch.cuda.get_device_name(device) if torch.cuda.is_available() else "cpu",
         }
+        self.fingerprint["generation"] = GENERATION[name]
         if self.kind == "diffusion":
-            self.fingerprint.update(mask_id=LLADA_MASK_ID, canvas_len=LLADA_CANVAS_LEN)
+            self.fingerprint["mask_id"] = LLADA_MASK_ID
 
     def encode_text(self, text):
         return self.tok(text, add_special_tokens=False).input_ids
