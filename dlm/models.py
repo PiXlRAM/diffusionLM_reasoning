@@ -41,16 +41,14 @@ class Scorer:
             cfg["repo"], revision=cfg["revision"], trust_remote_code=True
         )
         model_cls = AutoModel if self.kind == "diffusion" else AutoModelForCausalLM
-        self.model = (
-            model_cls.from_pretrained(
-                cfg["repo"],
-                revision=cfg["revision"],
-                trust_remote_code=True,
-                torch_dtype=torch.bfloat16,
-            )
-            .to(device)
-            .eval()
-        )
+        self.model = model_cls.from_pretrained(
+            cfg["repo"],
+            revision=cfg["revision"],
+            trust_remote_code=True,
+            torch_dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
+            device_map=device,
+        ).eval()
         self.end_id = self.tok.convert_tokens_to_ids(cfg["end_marker"])
         if self.end_id is None or self.end_id == self.tok.unk_token_id:
             raise ValueError(f"end marker {cfg['end_marker']!r} not in {name} vocabulary")
