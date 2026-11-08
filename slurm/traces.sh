@@ -1,5 +1,6 @@
 #!/bin/bash
 #SBATCH --account=edu
+#SBATCH --partition=short
 #SBATCH --job-name=dlm_traces
 #SBATCH --gres=gpu:1
 #SBATCH -c 2
