@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH -c 2
 #SBATCH --mem=32gb
-#SBATCH --time=0-05:00
+#SBATCH --time=0-08:00
 #SBATCH --output=logs/%x_%j.out
 
 # Usage: sbatch slurm/traces.sh MODEL [N_TRAIN] [N_TEST]   (defaults 80 and 300)
