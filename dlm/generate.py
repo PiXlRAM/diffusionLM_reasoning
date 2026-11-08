@@ -14,11 +14,12 @@ def trace_path(model, split):
 
 
 @torch.inference_mode()
-def llada_generate(model, prompt_ids, gen_length, steps, block_length, device):
+def llada_generate(model, prompt_ids, gen_length, steps, block_length, device, stop_ids=()):
     """Greedy semi-autoregressive LLaDA decoding with low-confidence remasking.
 
     The canvas is split into blocks filled left to right; within a block, each step commits the
-    masked positions the model is most confident about.
+    masked positions the model is most confident about. Committed blocks are never revisited, so
+    decoding can stop once a finished block contains a stop token without changing the output.
     """
     prompt_len = len(prompt_ids)
     x = torch.full((1, prompt_len + gen_length), LLADA_MASK_ID, dtype=torch.long, device=device)
@@ -42,6 +43,8 @@ def llada_generate(model, prompt_ids, gen_length, steps, block_length, device):
             confidence[block_end:] = -torch.inf
             chosen = confidence.topk(k).indices
             x[0, chosen] = pred[chosen]
+        if any(t in stop_ids for t in x[0, prompt_len:block_end].tolist()):
+            break
 
     return x[0, prompt_len:].tolist()
 
@@ -66,6 +69,7 @@ def generate_trace(scorer, question):
     """Generate one greedy solution and split it into reasoning and predicted answer."""
     settings = GENERATION[scorer.name]
     prompt = scorer.encode_prompt(question)
+    stops = {scorer.end_id, scorer.tok.eos_token_id}
     if scorer.kind == "diffusion":
         out = llada_generate(
             scorer.model,
@@ -74,11 +78,11 @@ def generate_trace(scorer, question):
             settings["steps"],
             settings["block_length"],
             scorer.device,
+            stop_ids=stops,
         )
     else:
         out = qwen_generate(scorer.model, scorer.tok, prompt, device=scorer.device, **settings)
 
-    stops = {scorer.end_id, scorer.tok.eos_token_id}
     end = next((i for i, t in enumerate(out) if t in stops), None)
     gen_ids = out if end is None else out[:end]
     text = scorer.tok.decode(gen_ids, skip_special_tokens=True)

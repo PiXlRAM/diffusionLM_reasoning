@@ -62,6 +62,8 @@ def main():
                 f"correct={record['correct']} truncated={record['truncated']} "
                 f"tokens={record['n_gen_tokens']} {time.time() - t:.1f}s"
             )
+            if record["pred"] is None:
+                print(f"    no \\boxed answer; output ends: {record['raw'][-200:]!r}")
 
 
 if __name__ == "__main__":

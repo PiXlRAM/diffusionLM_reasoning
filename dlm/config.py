@@ -31,8 +31,9 @@ GENERATION = {
 
 PROMPT_TEMPLATE = (
     "Solve the following math problem step by step. Write the reasoning in plain text, "
-    "one short sentence per step, without headings, bold text or LaTeX. "
-    "Then give the final answer as \\boxed{{number}}.\n\n{question}"
+    "one short sentence per step, without headings or bold text, and without LaTeX except "
+    "for the final answer. End with the final answer written exactly as \\boxed{{number}}."
+    "\n\n{question}"
 )
 ANSWER_PREFIX = "\nThe final answer is \\boxed{"
 ANSWER_SUFFIX = "}."
