@@ -22,17 +22,23 @@ def trace_path(model, split):
 
 
 @torch.inference_mode()
-def llada_generate(model, prompt_ids, canvas, block_length, device):
+def llada_generate(model, prompt_ids, canvas, block_length, device, answer_start=None):
     """Greedy semi-autoregressive LLaDA decoding of a pre-filled canvas.
 
     `canvas` holds LLADA_MASK_ID wherever the model should write and fixed token ids elsewhere.
     Blocks are filled left to right; within a block, each step commits the single masked position
-    with the lowest predictive entropy, using its most likely token.
+    with the lowest predictive entropy, using its most likely token. If `answer_start` is given,
+    blocks cover only canvas[:answer_start] and canvas[answer_start:] is decoded as one final
+    block, so no answer token is written before the reasoning is complete.
     """
     prompt_len = len(prompt_ids)
     x = torch.tensor([list(prompt_ids) + list(canvas)], dtype=torch.long, device=device)
-    for lo in range(prompt_len, prompt_len + len(canvas), block_length):
-        hi = min(lo + block_length, prompt_len + len(canvas))
+    split = len(canvas) if answer_start is None else answer_start
+    blocks = [(lo, min(lo + block_length, split)) for lo in range(0, split, block_length)]
+    if split < len(canvas):
+        blocks.append((split, len(canvas)))
+    for lo, hi in blocks:
+        lo, hi = prompt_len + lo, prompt_len + hi
         while True:
             masked = x[0, lo:hi] == LLADA_MASK_ID
             if not masked.any():
@@ -71,7 +77,10 @@ def _llada_trace(scorer, prompt, settings, stops):
     n_answer = settings["answer_slots"]
     n_reason = settings["gen_length"] - len(prefix) - n_answer
     canvas = [LLADA_MASK_ID] * n_reason + prefix + [LLADA_MASK_ID] * n_answer
-    out = llada_generate(scorer.model, prompt, canvas, settings["block_length"], scorer.device)
+    answer_start = n_reason if settings["answer_block"] == "after_reasoning" else None
+    out = llada_generate(
+        scorer.model, prompt, canvas, settings["block_length"], scorer.device, answer_start
+    )
 
     reasoning_ids = out[:n_reason]
     end = first_stop(reasoning_ids, stops)

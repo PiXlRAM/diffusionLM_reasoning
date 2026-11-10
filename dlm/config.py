@@ -26,12 +26,14 @@ LLADA_MASK_ID = 126336
 # Greedy decoding. Both models get the same 384-token budget; traces that hit it are dropped.
 # LLaDA uses reasoning-as-infilling (Horvitz et al.): the canvas is pre-filled as
 # [reasoning masks] + ANSWER_PREFIX + [answer masks], decoded one token per step, block by block,
-# always committing the masked position with the lowest entropy.
+# always committing the masked position with the lowest entropy. The reasoning region is cut
+# into blocks on its own and the answer region is decoded last, as a separate block.
 GENERATION = {
     "llada": {
         "layout": "reasoning_as_infilling",
         "gen_length": 384,
         "answer_slots": 10,
+        "answer_block": "after_reasoning",
         "block_length": 32,
         "tokens_per_step": 1,
         "remasking": "entropy",
