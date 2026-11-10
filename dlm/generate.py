@@ -1,3 +1,5 @@
+import json
+
 import torch
 
 from dlm.cache import make_key
@@ -19,6 +21,15 @@ def trace_path(model, split):
         fields["answer_prefix"] = ANSWER_PREFIX
     tag = make_key(fields)[:8]
     return TRACES_DIR / f"{model}_{split}_{tag}.jsonl"
+
+
+def load_traces(model, split):
+    with trace_path(model, split).open() as f:
+        return {r["qid"]: r for r in map(json.loads, f)}
+
+
+def load_both_correct(split):
+    return json.loads((TRACES_DIR / f"both_correct_{split}.json").read_text())["qids"]
 
 
 @torch.inference_mode()
