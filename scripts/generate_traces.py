@@ -53,7 +53,9 @@ def main():
                 question=data[qid]["question"],
                 gold=gold,
                 revision=scorer.fingerprint["revision"],
-                correct=(not record["truncated"]) and record["pred"] == gold,
+                correct=(not record["truncated"])
+                and record["pred"] == gold
+                and record.get("answers_agree", True),
             )
             f.write(json.dumps(record) + "\n")
             f.flush()
@@ -62,6 +64,12 @@ def main():
                 f"correct={record['correct']} truncated={record['truncated']} "
                 f"tokens={record['n_gen_tokens']} {time.time() - t:.1f}s"
             )
+            if "filler" in record:
+                print(
+                    f"    first={record['first_pred']} slots={record['slot_pred']} "
+                    f"reasoning_tokens={record['n_reasoning_tokens']} "
+                    f"filler_chars={len(record['filler'])}"
+                )
             if record["pred"] is None:
                 print(f"    no \\boxed answer; output ends: {record['raw'][-200:]!r}")
 

@@ -1,4 +1,10 @@
-from dlm.data import extract_number, normalize_number, split_generation, split_reference
+from dlm.data import (
+    extract_number,
+    normalize_number,
+    split_at_first_answer,
+    split_generation,
+    split_reference,
+)
 
 
 def test_normalize_number():
@@ -36,6 +42,22 @@ def test_split_generation_uses_last_boxed():
 def test_split_generation_without_boxed():
     reasoning, pred, removed = split_generation("I am not sure.")
     assert (reasoning, pred, removed) == ("I am not sure.", None, "")
+
+
+def test_split_at_first_answer_separates_filler():
+    text = (
+        "Ella got 40 - 4 = 36.\nMarion got 18 + 6 = 24.\nThe final answer is \\boxed{24}.\n\n"
+        "The correct reasoning should be:\nMarion got 24.\nThe final answer is \\boxed{24}."
+    )
+    reasoning, pred, sentence, filler = split_at_first_answer(text)
+    assert reasoning == "Ella got 40 - 4 = 36.\nMarion got 18 + 6 = 24."
+    assert pred == "24"
+    assert sentence == "The final answer is \\boxed{24}."
+    assert filler.startswith("The correct reasoning should be:")
+
+
+def test_split_at_first_answer_without_boxed():
+    assert split_at_first_answer("Still working ") == ("Still working", None, "", "")
 
 
 def test_split_reference_strips_calculator_notes():

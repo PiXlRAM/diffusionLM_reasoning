@@ -33,6 +33,12 @@ def main():
             f"no_answer={sum(r['pred'] is None for r in rows)} "
             f"mean_reasoning_tokens={mean(r['n_reasoning_tokens'] for r in kept) if kept else 0:.0f}"
         )
+        if rows and "filler" in rows[0]:
+            print(
+                f"  answers_disagree={sum(not r['answers_agree'] for r in rows)} "
+                f"with_filler={sum(bool(r['filler']) for r in rows)} "
+                f"no_answer_in_reasoning={sum(r['first_pred'] is None for r in rows)}"
+            )
 
     both = sorted(set.intersection(*correct.values()))
     print(f"correct for all of {args.models}: {len(both)} / {len(shared)}")

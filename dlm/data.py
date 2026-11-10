@@ -41,6 +41,20 @@ def split_generation(text):
     return text[:cut].strip(), extract_number(last.group(1)), text[cut:].strip()
 
 
+def split_at_first_answer(text):
+    """Split at the first \\boxed{} into (reasoning, answer, answer sentence, filler).
+
+    LLaDA's template canvas forces it to keep writing after it has answered; everything after the
+    first answer sentence is filler and is kept apart from the reasoning.
+    """
+    first = BOXED.search(text)
+    if first is None:
+        return text.strip(), None, "", ""
+    cut = max(text.rfind("\n", 0, first.start()), text.rfind(". ", 0, first.start()) + 1, 0)
+    end = first.end() + (text[first.end() : first.end() + 1] == ".")
+    return text[:cut].strip(), extract_number(first.group(1)), text[cut:end].strip(), text[end:].strip()
+
+
 def split_reference(answer_field):
     """Split a GSM8K reference solution into (reasoning, normalized final answer)."""
     reasoning, final = answer_field.split("####")

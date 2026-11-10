@@ -27,13 +27,16 @@ LLADA_MASK_ID = 126336
 # LLaDA uses reasoning-as-infilling (Horvitz et al.): the canvas is pre-filled as
 # [reasoning masks] + ANSWER_PREFIX + [answer masks], decoded one token per step, block by block,
 # always committing the masked position with the lowest entropy. The reasoning region is cut
-# into blocks on its own and the answer region is decoded last, as a separate block.
+# into blocks on its own and the answer region is decoded last, as a separate block. LLaDA fills
+# the leftover reasoning slots with text rather than padding, so its reasoning is cut just before
+# its first answer sentence and the rest is kept as filler.
 GENERATION = {
     "llada": {
         "layout": "reasoning_as_infilling",
         "gen_length": 384,
         "answer_slots": 10,
         "answer_block": "after_reasoning",
+        "reasoning_cut": "before_first_answer",
         "block_length": 32,
         "tokens_per_step": 1,
         "remasking": "entropy",

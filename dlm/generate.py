@@ -9,7 +9,7 @@ from dlm.config import (
     PROMPT_TEMPLATE,
     TRACES_DIR,
 )
-from dlm.data import extract_number, split_generation
+from dlm.data import extract_number, split_at_first_answer, split_generation
 
 
 def trace_path(model, split):
@@ -89,15 +89,19 @@ def _llada_trace(scorer, prompt, settings, stops):
     answer_end = first_stop(answer_ids, stops)
     answer_text = scorer.tok.decode(answer_ids[:answer_end], skip_special_tokens=True)
     reasoning_text = scorer.tok.decode(reasoning_ids, skip_special_tokens=True)
-    # Any answer sentence the model also wrote inside the reasoning block is cut, as for Qwen.
-    reasoning, _, answer_sentence = split_generation(reasoning_text)
+    reasoning, first_pred, answer_sentence, filler = split_at_first_answer(reasoning_text)
+    slot_pred = extract_number(answer_text.split("}")[0])
     return {
         "raw": reasoning_text + ANSWER_PREFIX + answer_text,
         "reasoning": reasoning,
         "answer_sentence": answer_sentence,
+        "filler": filler,
         "answer_block": answer_text,
-        "pred": extract_number(answer_text.split("}")[0]),
-        "truncated": end is None,
+        "first_pred": first_pred,
+        "slot_pred": slot_pred,
+        "pred": first_pred if first_pred is not None else slot_pred,
+        "answers_agree": first_pred is None or first_pred == slot_pred,
+        "truncated": first_pred is None and end is None,
         "n_gen_tokens": len(reasoning_ids),
     }
 
