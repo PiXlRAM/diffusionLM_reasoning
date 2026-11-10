@@ -37,7 +37,9 @@ def main():
             print(
                 f"  answers_disagree={sum(not r['answers_agree'] for r in rows)} "
                 f"with_filler={sum(bool(r['filler']) for r in rows)} "
-                f"no_answer_in_reasoning={sum(r['first_pred'] is None for r in rows)}"
+                f"no_answer_in_reasoning={sum(r['first_pred'] is None for r in rows)} "
+                f"cut_off_but_slots_correct="
+                f"{sum(r['truncated'] and r['slot_pred'] == r['gold'] for r in rows)}"
             )
 
     both = sorted(set.intersection(*correct.values()))
