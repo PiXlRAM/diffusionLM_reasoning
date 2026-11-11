@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import torch
 
 from dlm.config import LLADA_MASK_ID
-from dlm.generate import llada_generate
+from dlm.generate import llada_infill
 
 VOCAB = 50
 FIXED = 7
@@ -28,7 +28,7 @@ def test_fills_every_mask_and_keeps_fixed_tokens():
     prompt = [1, 2, 3]
     canvas = [LLADA_MASK_ID] * 5 + [FIXED, FIXED] + [LLADA_MASK_ID] * 3
     model = FakeModel()
-    out = llada_generate(model, prompt, canvas, block_length=4, device="cpu")
+    out = llada_infill(model, prompt, canvas, block_length=4, device="cpu")
     assert len(out) == len(canvas)
     assert LLADA_MASK_ID not in out
     assert out[5:7] == [FIXED, FIXED]
@@ -40,7 +40,7 @@ def test_fills_every_mask_and_keeps_fixed_tokens():
 def test_one_forward_pass_per_masked_token():
     canvas = [LLADA_MASK_ID] * 6 + [FIXED] + [LLADA_MASK_ID] * 2
     model = FakeModel()
-    llada_generate(model, [1], canvas, block_length=4, device="cpu")
+    llada_infill(model, [1], canvas, block_length=4, device="cpu")
     assert model.calls == 8
 
 
@@ -65,7 +65,7 @@ def test_answer_block_waits_for_reasoning():
     n_reason, n_answer = 6, 3
     canvas = [LLADA_MASK_ID] * n_reason + [FIXED] + [LLADA_MASK_ID] * n_answer
     model = LateFirstModel()
-    out = llada_generate(model, prompt, canvas, block_length=4, device="cpu", answer_start=n_reason)
+    out = llada_infill(model, prompt, canvas, block_length=4, device="cpu", answer_start=n_reason)
     assert LLADA_MASK_ID not in out
     reason = slice(len(prompt), len(prompt) + n_reason)
     answer = slice(len(prompt) + n_reason + 1, None)
@@ -77,7 +77,7 @@ def test_answer_block_waits_for_reasoning():
 def test_without_answer_start_answer_can_come_first():
     canvas = [LLADA_MASK_ID] * 6 + [FIXED] + [LLADA_MASK_ID] * 3
     model = LateFirstModel()
-    llada_generate(model, [1], canvas, block_length=4, device="cpu")
+    llada_infill(model, [1], canvas, block_length=4, device="cpu")
     answer_first = any(
         (x[8:] != LLADA_MASK_ID).any() and (x[1:7] == LLADA_MASK_ID).any() for x in model.inputs
     )

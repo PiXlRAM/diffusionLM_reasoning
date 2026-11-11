@@ -33,7 +33,43 @@ def load_both_correct(split):
 
 
 @torch.inference_mode()
-def llada_generate(model, prompt_ids, canvas, block_length, device, answer_start=None):
+def llada_generate(model, prompt_ids, gen_length, steps, block_length, device, stop_ids=()):
+    """Greedy semi-autoregressive LLaDA decoding with low-confidence remasking.
+
+    The canvas is split into blocks filled left to right; within a block, each step commits the
+    masked positions the model is most confident about. Committed blocks are never revisited, so
+    decoding can stop once a finished block contains a stop token without changing the output.
+    """
+    prompt_len = len(prompt_ids)
+    x = torch.full((1, prompt_len + gen_length), LLADA_MASK_ID, dtype=torch.long, device=device)
+    x[0, :prompt_len] = torch.tensor(prompt_ids, device=device)
+    num_blocks = gen_length // block_length
+    steps_per_block = steps // num_blocks
+
+    for b in range(num_blocks):
+        block_end = prompt_len + (b + 1) * block_length
+        n_masked = int((x[0, block_end - block_length : block_end] == LLADA_MASK_ID).sum())
+        base, extra = divmod(n_masked, steps_per_block)
+        for i in range(steps_per_block):
+            k = base + (1 if i < extra else 0)
+            if k == 0:
+                continue
+            masked = x[0] == LLADA_MASK_ID
+            logits = model(x).logits[0]
+            pred = logits.argmax(dim=-1)
+            confidence = torch.softmax(logits.float(), dim=-1).gather(-1, pred[:, None]).squeeze(-1)
+            confidence[~masked] = -torch.inf
+            confidence[block_end:] = -torch.inf
+            chosen = confidence.topk(k).indices
+            x[0, chosen] = pred[chosen]
+        if any(t in stop_ids for t in x[0, prompt_len:block_end].tolist()):
+            break
+
+    return x[0, prompt_len:].tolist()
+
+
+@torch.inference_mode()
+def llada_infill(model, prompt_ids, canvas, block_length, device, answer_start=None):
     """Greedy semi-autoregressive LLaDA decoding of a pre-filled canvas.
 
     `canvas` holds LLADA_MASK_ID wherever the model should write and fixed token ids elsewhere.
@@ -83,13 +119,43 @@ def first_stop(ids, stops):
     return next((i for i, t in enumerate(ids) if t in stops), None)
 
 
+def _split_free_text(scorer, out, stops):
+    end = first_stop(out, stops)
+    gen_ids = out if end is None else out[:end]
+    text = scorer.tok.decode(gen_ids, skip_special_tokens=True)
+    reasoning, pred, answer_sentence = split_generation(text)
+    return {
+        "raw": text,
+        "reasoning": reasoning,
+        "answer_sentence": answer_sentence,
+        "pred": pred,
+        "truncated": end is None,
+        "n_gen_tokens": len(gen_ids),
+    }
+
+
 def _llada_trace(scorer, prompt, settings, stops):
+    if settings.get("layout") == "reasoning_as_infilling":
+        return _llada_infill_trace(scorer, prompt, settings, stops)
+    out = llada_generate(
+        scorer.model,
+        prompt,
+        settings["gen_length"],
+        settings["steps"],
+        settings["block_length"],
+        scorer.device,
+        stop_ids=stops,
+    )
+    return _split_free_text(scorer, out, stops)
+
+
+def _llada_infill_trace(scorer, prompt, settings, stops):
     prefix = scorer.encode_text(ANSWER_PREFIX)
     n_answer = settings["answer_slots"]
     n_reason = settings["gen_length"] - len(prefix) - n_answer
     canvas = [LLADA_MASK_ID] * n_reason + prefix + [LLADA_MASK_ID] * n_answer
     answer_start = n_reason if settings["answer_block"] == "after_reasoning" else None
-    out = llada_generate(
+    out = llada_infill(
         scorer.model, prompt, canvas, settings["block_length"], scorer.device, answer_start
     )
 
@@ -119,18 +185,7 @@ def _llada_trace(scorer, prompt, settings, stops):
 
 def _qwen_trace(scorer, prompt, settings, stops):
     out = qwen_generate(scorer.model, scorer.tok, prompt, device=scorer.device, **settings)
-    end = first_stop(out, stops)
-    gen_ids = out if end is None else out[:end]
-    text = scorer.tok.decode(gen_ids, skip_special_tokens=True)
-    reasoning, pred, answer_sentence = split_generation(text)
-    return {
-        "raw": text,
-        "reasoning": reasoning,
-        "answer_sentence": answer_sentence,
-        "pred": pred,
-        "truncated": end is None,
-        "n_gen_tokens": len(gen_ids),
-    }
+    return _split_free_text(scorer, out, stops)
 
 
 def generate_trace(scorer, question):
