@@ -33,7 +33,9 @@ def main():
                 sequential = scorer.default_estimator == "sequential"
                 options = scorer.slot_alternatives(item, k=1, sequential=sequential)
                 best = [o[0][0] for o in options]
-                is_top = best == scorer.tok.convert_ids_to_tokens(item.slots)
+                want = scorer.tok.convert_ids_to_tokens(item.slots)
+                closings = set(scorer.tok.convert_ids_to_tokens(scorer.closing_ids))
+                is_top = best[:-2] == want[:-2] and best[-2] in closings and best[-1] == want[-1]
                 probs.append(s["prob"])
                 top += is_top
                 if s["prob"] < 0.5 or not is_top:

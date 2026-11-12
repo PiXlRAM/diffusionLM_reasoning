@@ -7,6 +7,7 @@ from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
 
 from dlm.cache import make_key
 from dlm.config import (
+    ANSWER_CLOSINGS,
     ANSWER_PREFIX,
     ESTIMATORS,
     GENERATION,
@@ -57,7 +58,12 @@ class Scorer:
         self.end_id = self.tok.convert_tokens_to_ids(cfg["end_marker"])
         if self.end_id is None or self.end_id == self.tok.unk_token_id:
             raise ValueError(f"end marker {cfg['end_marker']!r} not in {name} vocabulary")
-        self.answer_suffix = cfg["answer_suffix"]
+        self.closing_ids = []
+        for text in ANSWER_CLOSINGS:
+            ids = self.encode_text(text)
+            if len(ids) != 1:
+                raise ValueError(f"closing {text!r} is {len(ids)} tokens for {name}")
+            self.closing_ids += ids
         self.default_estimator = cfg["estimator"]
         self.fingerprint = {
             "model": cfg["repo"],
@@ -67,7 +73,7 @@ class Scorer:
             ).hexdigest(),
             "prompt_template": PROMPT_TEMPLATE,
             "answer_prefix": ANSWER_PREFIX,
-            "answer_suffix": cfg["answer_suffix"],
+            "answer_closings": list(ANSWER_CLOSINGS),
             "end_marker": cfg["end_marker"],
             "dtype": "bfloat16",
             "gpu": torch.cuda.get_device_name(device) if torch.cuda.is_available() else "cpu",
@@ -88,7 +94,7 @@ class Scorer:
             prompt=self.encode_prompt(question),
             reasoning=self.encode_text(reasoning),
             prefix=self.encode_text(ANSWER_PREFIX),
-            slots=self.encode_text(answer) + self.encode_text(self.answer_suffix) + [self.end_id],
+            slots=self.encode_text(answer) + [self.closing_ids[0], self.end_id],
         )
 
     @torch.inference_mode()
@@ -107,11 +113,6 @@ class Scorer:
             if self.kind == "ar":
                 kwargs["position_ids"] = torch.arange(len(ids), device=self.device)[None]
         return self.model(input_ids, **kwargs).logits[0, positions].float()
-
-    def _slot_logprobs(self, ids, positions, targets, hidden=()):
-        """Log-probability of targets[i] at positions[i] from one forward pass."""
-        logprobs = torch.log_softmax(self._logits(ids, positions, hidden), dim=-1)
-        return logprobs[torch.arange(len(targets)), torch.tensor(targets)].tolist()
 
     def _slot_ids_and_positions(self, item):
         ctx = item.context()
@@ -142,17 +143,40 @@ class Scorer:
             for ids_row, probs in zip(top.indices, top.values)
         ]
 
+    def _logprob_rows(self, ids, positions, hidden):
+        return torch.log_softmax(self._logits(ids, positions, hidden), dim=-1)
+
     def _score_uncached(self, item, estimator):
-        if self.kind == "ar" or estimator == "joint":
-            ids, positions = self._slot_ids_and_positions(item)
-            return self._slot_logprobs(ids, positions, item.slots, item.hidden), 1
-        ctx = item.context()
-        start, n = len(ctx), len(item.slots)
+        """Per-slot log-probabilities: one per answer token, then one for closing plus end marker.
+
+        The closing slot is marginalized over ANSWER_CLOSINGS, so whether the model would close
+        with "}" or "}." does not count against the answer.
+        """
+        ctx, slots, hidden = item.context(), item.slots, item.hidden
+        start, digits, end = len(ctx), item.slots[:-2], item.slots[-1]
+        d, n = len(digits), len(item.slots)
+        if self.kind == "ar":
+            closing, digit_lps = [], None
+            for c in self.closing_ids:
+                rows = self._logprob_rows(ctx + digits + [c, end], list(range(start - 1, start + n - 1)), hidden)
+                digit_lps = [rows[i, t].item() for i, t in enumerate(digits)]
+                closing.append(rows[d, c] + rows[d + 1, end])
+            return digit_lps + [torch.logsumexp(torch.stack(closing), 0).item()], len(self.closing_ids)
+        if estimator == "joint":
+            rows = self._logprob_rows(ctx + [LLADA_MASK_ID] * n, list(range(start, start + n)), hidden)
+            close = torch.logsumexp(rows[d, self.closing_ids], 0) + rows[d + 1, end]
+            return [rows[i, t].item() for i, t in enumerate(digits)] + [close.item()], 1
         per_slot = []
-        for i in range(n):
-            ids = ctx + item.slots[:i] + [LLADA_MASK_ID] * (n - i)
-            per_slot += self._slot_logprobs(ids, [start + i], [item.slots[i]], item.hidden)
-        return per_slot, n
+        for i in range(d):
+            ids = ctx + digits[:i] + [LLADA_MASK_ID] * (n - i)
+            per_slot.append(self._logprob_rows(ids, [start + i], hidden)[0, digits[i]].item())
+        close_lps = self._logprob_rows(ctx + digits + [LLADA_MASK_ID] * 2, [start + d], hidden)[0]
+        closing = [
+            close_lps[c] + self._logprob_rows(ctx + digits + [c, LLADA_MASK_ID], [start + d + 1], hidden)[0, end]
+            for c in self.closing_ids
+        ]
+        per_slot.append(torch.logsumexp(torch.stack(closing), 0).item())
+        return per_slot, d + 1 + len(self.closing_ids)
 
     def score(self, item, estimator=None, meta=None):
         """Probability of the answer slots given the context. Cached when a cache is set."""
