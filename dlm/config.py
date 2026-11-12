@@ -5,6 +5,7 @@ PROJ = Path(os.environ.get("PROJ", Path(__file__).resolve().parents[1]))
 CACHE_DIR = PROJ / "cache"
 RESULTS_DIR = PROJ / "results"
 TRACES_DIR = RESULTS_DIR / "traces"
+STEPS_DIR = RESULTS_DIR / "steps"
 
 MODELS = {
     "llada": {
@@ -63,3 +64,18 @@ PROMPT_TEMPLATE = (
 )
 ANSWER_PREFIX = "\nThe final answer is \\boxed{"
 ESTIMATORS = ("joint", "sequential")
+
+# LLM step extraction: annotates each trace's computation graph; never used for scoring.
+# Outputs are cached per trace and checked in code (quotes, arithmetic, links, gold answer).
+# Prices are USD per million tokens (OpenAI standard, short context, as of Nov 2026).
+STEP_EXTRACTOR = {
+    "model": "gpt-5.6-luna",
+    "reasoning_effort": "low",
+    "max_attempts": 3,
+    "price_in": 0.20,
+    "price_out": 1.20,
+}
+
+# Step-level deletion removes computation and restatement steps; setup and connective text stay.
+# Traces with at most this many removable steps get every subset scored, others a greedy search.
+STEP_EXHAUSTIVE_MAX = 8
