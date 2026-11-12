@@ -8,7 +8,6 @@ from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
 from dlm.cache import make_key
 from dlm.config import (
     ANSWER_PREFIX,
-    ANSWER_SUFFIX,
     ESTIMATORS,
     GENERATION,
     LLADA_MASK_ID,
@@ -58,6 +57,8 @@ class Scorer:
         self.end_id = self.tok.convert_tokens_to_ids(cfg["end_marker"])
         if self.end_id is None or self.end_id == self.tok.unk_token_id:
             raise ValueError(f"end marker {cfg['end_marker']!r} not in {name} vocabulary")
+        self.answer_suffix = cfg["answer_suffix"]
+        self.default_estimator = cfg["estimator"]
         self.fingerprint = {
             "model": cfg["repo"],
             "revision": cfg["revision"],
@@ -66,7 +67,7 @@ class Scorer:
             ).hexdigest(),
             "prompt_template": PROMPT_TEMPLATE,
             "answer_prefix": ANSWER_PREFIX,
-            "answer_suffix": ANSWER_SUFFIX,
+            "answer_suffix": cfg["answer_suffix"],
             "end_marker": cfg["end_marker"],
             "dtype": "bfloat16",
             "gpu": torch.cuda.get_device_name(device) if torch.cuda.is_available() else "cpu",
@@ -87,7 +88,7 @@ class Scorer:
             prompt=self.encode_prompt(question),
             reasoning=self.encode_text(reasoning),
             prefix=self.encode_text(ANSWER_PREFIX),
-            slots=self.encode_text(answer) + self.encode_text(ANSWER_SUFFIX) + [self.end_id],
+            slots=self.encode_text(answer) + self.encode_text(self.answer_suffix) + [self.end_id],
         )
 
     @torch.inference_mode()
@@ -120,10 +121,22 @@ class Scorer:
         return ctx + [LLADA_MASK_ID] * n, list(range(start, start + n))
 
     @torch.inference_mode()
-    def slot_alternatives(self, item, k=5):
-        """Top-k tokens the model predicts at each answer slot (one-pass view), for diagnostics."""
-        ids, positions = self._slot_ids_and_positions(item)
-        top = torch.softmax(self._logits(ids, positions, item.hidden), dim=-1).topk(k, dim=-1)
+    def slot_alternatives(self, item, k=5, sequential=False):
+        """Top-k tokens the model predicts at each answer slot, for diagnostics.
+
+        By default one pass with every slot masked (LLaDA) or teacher-forced (Qwen). With
+        `sequential`, LLaDA's slot i is predicted with the correct slots before it revealed.
+        """
+        if sequential and self.kind == "diffusion":
+            ctx, n = item.context(), len(item.slots)
+            logits = torch.cat([
+                self._logits(ctx + item.slots[:i] + [LLADA_MASK_ID] * (n - i), [len(ctx) + i], item.hidden)
+                for i in range(n)
+            ])
+        else:
+            ids, positions = self._slot_ids_and_positions(item)
+            logits = self._logits(ids, positions, item.hidden)
+        top = torch.softmax(logits, dim=-1).topk(k, dim=-1)
         return [
             [(self.tok.convert_ids_to_tokens(t), p) for t, p in zip(ids_row.tolist(), probs.tolist())]
             for ids_row, probs in zip(top.indices, top.values)
@@ -141,12 +154,12 @@ class Scorer:
             per_slot += self._slot_logprobs(ids, [start + i], [item.slots[i]], item.hidden)
         return per_slot, n
 
-    def score(self, item, estimator="joint", meta=None):
+    def score(self, item, estimator=None, meta=None):
         """Probability of the answer slots given the context. Cached when a cache is set."""
-        if estimator not in ESTIMATORS:
+        if self.kind == "ar" or estimator is None:
+            estimator = self.default_estimator
+        if self.kind == "diffusion" and estimator not in ESTIMATORS:
             raise ValueError(f"unknown estimator {estimator!r}")
-        if self.kind == "ar":
-            estimator = "exact"
         key_fields = {
             **self.fingerprint,
             "estimator": estimator,

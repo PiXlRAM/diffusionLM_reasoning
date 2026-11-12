@@ -30,7 +30,9 @@ def main():
                 r = traces[qid]
                 item = scorer.build(r["question"], r["reasoning"], r["gold"])
                 s = scorer.score(item, meta={"question": qid, "condition": "full"})
-                best = [options[0][0] for options in scorer.slot_alternatives(item, k=1)]
+                sequential = scorer.default_estimator == "sequential"
+                options = scorer.slot_alternatives(item, k=1, sequential=sequential)
+                best = [o[0][0] for o in options]
                 is_top = best == scorer.tok.convert_ids_to_tokens(item.slots)
                 probs.append(s["prob"])
                 top += is_top
@@ -38,7 +40,7 @@ def main():
                     low.append((qid, round(s["prob"], 3), best))
             n = len(probs)
             print(
-                f"{name}/{split}: n={n} median_p={median(probs):.3f} "
+                f"{name}/{split} [{scorer.default_estimator}]: n={n} median_p={median(probs):.3f} "
                 f"p>0.5={sum(p > 0.5 for p in probs)}/{n} p>0.9={sum(p > 0.9 for p in probs)}/{n} "
                 f"top_at_every_slot={top}/{n}"
             )

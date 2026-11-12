@@ -12,14 +12,22 @@ MODELS = {
         "revision": "08b83a6feb34df1a6011b80c3c00c7563e963b07",
         "kind": "diffusion",
         "end_marker": "<|eot_id|>",
+        "answer_suffix": "}.",
+        "estimator": "sequential",
     },
     "qwen": {
         "repo": "Qwen/Qwen2.5-7B-Instruct",
         "revision": "a09a35458c702b33eeacc393d103063234e8bc28",
         "kind": "ar",
         "end_marker": "<|im_end|>",
+        "answer_suffix": "}",
+        "estimator": "exact",
     },
 }
+# answer_suffix: the closing token each model itself predicts after the answer in the scoring
+# layout (Qwen closes its own answers with a bare "}" in 286/300 test traces).
+# estimator: LLaDA scores answers slot by slot; the train pilot found one pass ranks deletion
+# drops differently (Spearman 0.83, threshold agreement 0.86, below the 0.95 bar).
 
 LLADA_MASK_ID = 126336
 
@@ -53,6 +61,4 @@ PROMPT_TEMPLATE = (
     "\n\n{question}"
 )
 ANSWER_PREFIX = "\nThe final answer is \\boxed{"
-ANSWER_SUFFIX = "}."
-
 ESTIMATORS = ("joint", "sequential")
