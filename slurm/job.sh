@@ -17,6 +17,7 @@ shift
 export PROJ=${PROJ:-/insomnia001/depts/edu/COMS_6975_Fall2026/vs3032/dlm}
 export HF_HOME=$PROJ/hf_cache
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
+export PYTHONUNBUFFERED=1
 
 module load anaconda
 unset PYTHONPATH
