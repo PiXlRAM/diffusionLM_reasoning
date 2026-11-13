@@ -50,7 +50,12 @@ def main():
     if args.condition not in CONDITIONS[kind]:
         raise SystemExit(f"{args.model} supports {CONDITIONS[kind]}")
     with (STEPS_DIR / f"{args.model}_{args.split}.jsonl").open() as f:
-        extractions = [r for r in map(json.loads, f) if r["ok"]][: args.n]
+        # Main analysis: checked graphs that contain a computation producing the gold answer.
+        # "answer not in reasoning" traces are kept as a separate category (not scored here).
+        extractions = [
+            r for r in map(json.loads, f)
+            if r["ok"] and "answer not in reasoning" not in r.get("flags", [])
+        ][: args.n]
     traces = load_traces(args.model, args.split)
     out_dir = RESULTS_DIR / "step_deletion"
     out_dir.mkdir(parents=True, exist_ok=True)
