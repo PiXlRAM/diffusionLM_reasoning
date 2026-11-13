@@ -144,6 +144,35 @@ def load_done(path, extractor, effort):
     return {r["qid"]: r for r in rows}
 
 
+def reverify(split, models):
+    """Re-run code checks on saved extractions. No API calls."""
+    review = [f"# Step extraction review ({split}, re-verified)", ""]
+    for model in models:
+        traces = load_traces(model, split)
+        path = STEPS_DIR / f"{model}_{split}.jsonl"
+        rows = [json.loads(l) for l in path.open()]
+        stats = {"ok": 0, "failed": 0, "became_ok": 0, "became_fail": 0, "no_answer": 0}
+        out = []
+        for rec in rows:
+            before = rec["ok"]
+            t = traces[rec["qid"]]
+            check = verify(t["question"], t["reasoning"], t["gold"], rec["steps"])
+            keep = {k: rec[k] for k in ("qid", "model", "extractor", "effort", "reasoning", "gold", "steps", "calls")
+                    if k in rec}
+            keep.update(check)
+            out.append(keep)
+            stats["ok" if check["ok"] else "failed"] += 1
+            stats["became_ok"] += check["ok"] and not before
+            stats["became_fail"] += (not check["ok"]) and before
+            stats["no_answer"] += "answer not in reasoning" in check["flags"]
+            review.append(review_entry(model, rec["qid"], t, rec["steps"], check))
+        path.write_text("".join(json.dumps(r) + "\n" for r in out))
+        print(f"{model}: {stats}")
+    review_path = STEPS_DIR / f"review_{split}.md"
+    review_path.write_text("\n".join(review), encoding="utf-8")
+    print(f"review file: {review_path}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--split", default="test")
@@ -155,7 +184,13 @@ def main():
                         help="USD per million input tokens")
     parser.add_argument("--price-out", type=float, default=STEP_EXTRACTOR["price_out"],
                         help="USD per million output tokens")
+    parser.add_argument("--reverify", action="store_true",
+                        help="re-check saved extractions with the current verifier; no API calls")
     args = parser.parse_args()
+
+    if args.reverify:
+        reverify(args.split, args.models)
+        return
 
     from openai import OpenAI
 

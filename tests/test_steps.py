@@ -6,6 +6,7 @@ from dlm.steps import (
     safe_eval,
     step_token_spans,
     token_steps,
+    values_stated_in,
     verify,
 )
 
@@ -64,16 +65,28 @@ def test_safe_eval_and_rounding():
 
 
 def test_question_values_include_number_words():
-    q = "Sandy bought 1 million tokens and took a two-hour break."
+    q = "Sandy bought 1 million tokens and took a two-hour break. Each slice is 50 cents."
     vals = question_values(q)
     assert any(abs(v - 1_000_000) < 1 for v in vals)
     assert any(abs(v - 2) < 1e-9 for v in vals)
+    assert any(abs(v - 0.5) < 1e-9 for v in vals)
+
+
+def test_values_stated_include_word_numbers():
+    assert any(same(v, 6) for v in values_stated_in("Marcia has six pets."))
+    assert any(same(v, 28) for v in values_stated_in("twenty-eight pets"))
+
+
+def same(a, b):
+    return abs(a - b) <= 1e-9
 
 
 def test_licensed_constants():
     assert 2.0 in licensed_constants("she keeps half of them")
     assert 3.0 in licensed_constants("spent thrice as much")
     assert 100.0 in licensed_constants("a 20% tip")
+    assert 100.0 in licensed_constants("50 cents each")
+    assert 0.25 in licensed_constants("32 quarters in a jar")
     assert 7.0 not in licensed_constants("no temporal words here")
     assert 0.8 in licensed_constants("discount", qvals=[0.2])
 
@@ -84,6 +97,36 @@ def test_verify_accepts_a_correct_graph():
     assert check["final_step"] == 1 and check["chain"] == [0, 1]
     assert check["spans"][0] == (0, TEXT.index("$68.") + 4)
     assert len(check["answer_mentions"]) == 2
+
+
+def test_verify_accepts_word_result_and_omitted_coin_constant():
+    question = "Marcia has two more pets than Cindy. Cindy has four pets."
+    text = "Marcia has four + two = six pets."
+    steps = [
+        step(
+            "Marcia has four + two = six pets.",
+            "computation",
+            "4 + 2",
+            "6",
+            [("4", "question", None), ("2", "question", None)],
+        )
+    ]
+    check = verify(question, text, "6", steps)
+    assert check["ok"], check["errors"]
+
+    question = "Justin has 32 quarters."
+    text = "32 quarters are worth 32 * 0.25 = 8.00."
+    steps = [
+        step(
+            "32 quarters are worth 32 * 0.25 = 8.00.",
+            "computation",
+            "32 * 0.25",
+            "8.00",
+            [("32", "question", None)],  # 0.25 omitted; licensed by "quarters"
+        )
+    ]
+    check = verify(question, text, "8", steps)
+    assert check["ok"], check["errors"]
 
 
 def test_verify_rejects_inexact_division_without_rounding():

@@ -145,15 +145,34 @@ def numbers_in(text):
     return [(to_float(m.group()), m.start(), m.end()) for m in NUMBER.finditer(text)]
 
 
+_COMPOUND = re.compile(
+    r"\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)[\s-]+"
+    r"(one|two|three|four|five|six|seven|eight|nine)\b",
+    re.I,
+)
+_CENTS = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*cents?\b", re.I)
+
+
 def word_numbers_in(text):
-    """Values for number words in text (two, million, ...)."""
-    return [float(WORD_VALUES[m.group().lower()]) for m in WORD_NUMBER.finditer(text)]
+    """Values for number words in text (two, twenty-eight, million, ...)."""
+    values = [float(WORD_VALUES[m.group().lower()]) for m in WORD_NUMBER.finditer(text)]
+    values += [
+        float(WORD_VALUES[m.group(1).lower()] + WORD_VALUES[m.group(2).lower()])
+        for m in _COMPOUND.finditer(text)
+    ]
+    return values
+
+
+def values_stated_in(text):
+    """Numeric values written in text as digits or number words."""
+    return [v for v, _, _ in numbers_in(text) if v is not None] + word_numbers_in(text)
 
 
 def question_values(question):
     values = [v for v, _, _ in numbers_in(question) if v is not None]
     values += word_numbers_in(question)
     values += [to_float(m.group(1)) / 100 for m in PERCENT.finditer(question)]
+    values += [to_float(m.group(1)) / 100 for m in _CENTS.finditer(question)]
     # "1 million" / "1,000,000" style: digit times a scale word nearby is already covered
     # separately; also accept digit*million when both appear.
     if re.search(r"\bmillion\b", question, re.I):
@@ -167,11 +186,11 @@ def licensed_constants(text, qvals=()):
     """Constants a word in text may introduce (half -> 2, thrice -> 3, ...)."""
     t = text.lower()
     out = {1.0}  # structural complement, e.g. 1 - 0.20
-    if re.search(r"\bhalf\b|\bhalves\b|\btwice\b|\bdouble\b", t):
+    if re.search(r"\bhalf\b|\bhalves\b|\btwice\b|\bdouble\b|\baverage\b|\bboth\b", t):
         out.add(2.0)
     if re.search(r"\bthrice\b|\bthird\b|\bthirds\b", t):
         out.add(3.0)
-    if re.search(r"\bquarter\b|\bquarters\b|\bfourth\b", t):
+    if re.search(r"\bfourth\b|\bfourths\b|three-quarters|three quarters|a quarter of|one-quarter", t):
         out.add(4.0)
     if re.search(r"\bdozen\b", t):
         out.add(12.0)
@@ -181,8 +200,17 @@ def licensed_constants(text, qvals=()):
         out.add(60.0)
     if re.search(r"\bday\b|\bdays\b|\bhour\b|\bhours\b", t):
         out.add(24.0)
-    if re.search(r"%|\bpercent\b", t):
+    if re.search(r"%|\bpercent\b|\bcents?\b", t):
         out.add(100.0)
+    # US coin face values when those coins are named.
+    if re.search(r"\bquarters?\b", t):
+        out.add(0.25)
+    if re.search(r"\bdimes?\b", t):
+        out.add(0.10)
+    if re.search(r"\bnickels?\b", t):
+        out.add(0.05)
+    if re.search(r"\bpenn(?:y|ies)\b", t):
+        out.add(0.01)
     # Complements of rates from the problem: 20% -> 0.20 and 0.80.
     for v in qvals:
         if v is not None and 0 < abs(v) < 1:
@@ -302,10 +330,30 @@ def verify(question, text, gold, steps):
                             )
                     except (ValueError, SyntaxError, ZeroDivisionError) as e:
                         errors.append(f"step {i}: cannot evaluate expression ({e})")
-                    expr_vals = sorted(v for v, _, _ in numbers_in(s["expression"]) if v is not None)
-                    in_vals = sorted(v for v in (to_float(x["value"]) for x in s["inputs"]) if v is not None)
-                    if len(expr_vals) != len(in_vals) or not all(map(same, expr_vals, in_vals)):
-                        errors.append(f"step {i}: inputs must list every number in the expression once")
+                    expr_vals = [v for v, _, _ in numbers_in(s["expression"]) if v is not None]
+                    in_vals = [v for v in (to_float(x["value"]) for x in s["inputs"]) if v is not None]
+                    # Inputs may omit numbers that are already in the problem or licensed
+                    # constants (coin values, 100 for cents, ...). Every listed input must
+                    # still appear in the expression.
+                    remaining = list(expr_vals)
+                    for v in in_vals:
+                        for k, ev in enumerate(remaining):
+                            if same(v, ev):
+                                remaining.pop(k)
+                                break
+                        else:
+                            errors.append(f"step {i}: input {v:g} is not in the expression")
+                            break
+                    else:
+                        for ev in remaining:
+                            ok_omit = any(same(ev, q) for q in qvals) or any(
+                                same(ev, c) for c in allowed_const
+                            )
+                            if not ok_omit:
+                                errors.append(
+                                    f"step {i}: inputs must cover expression number {ev:g}"
+                                )
+                                break
             else:
                 if s["expression"] is not None:
                     errors.append(f"step {i}: result-only computation must not invent an expression")
@@ -322,7 +370,7 @@ def verify(question, text, gold, steps):
 
         if role in REMOVABLE_ROLES and spans[i] is not None and results[i] is not None:
             lo, hi = spans[i]
-            if not any(same(v, results[i]) for v, _, _ in numbers_in(text[lo:hi])):
+            if not any(same(v, results[i]) for v in values_stated_in(text[lo:hi])):
                 errors.append(f"step {i}: its result {s['result']} does not appear in its quote")
 
         for j, inp in enumerate(s["inputs"]):
