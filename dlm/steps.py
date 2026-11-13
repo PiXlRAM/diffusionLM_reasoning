@@ -7,6 +7,7 @@ result, every link must match by value, and the gold answer must be produced by 
 """
 
 import ast
+import math
 import operator
 import re
 
@@ -15,6 +16,7 @@ from dlm.data import normalize_number
 ROLES = ("setup", "plan", "computation", "restatement", "other")
 SOURCES = ("question", "step", "constant")
 REMOVABLE_ROLES = ("computation", "restatement")
+ROUNDINGS = ("floor", "ceil", "round")
 
 INSTRUCTIONS = """You annotate a model's step-by-step solution to a grade-school math problem.
 
@@ -24,24 +26,45 @@ must not overlap and must follow the order of the text. Short connectives that b
 may be left out.
 
 Each step has one role:
-- setup: restates facts given in the problem, with no new arithmetic.
+- setup: restates facts given in the problem, with no new number produced by the model.
 - plan: says what will be computed, without computing it.
-- computation: does arithmetic and states a new number. Use one step per stated result; if a
-  sentence states two results, split it into two quotes.
+- computation: states a new number the model has figured out. One step per stated result.
 - restatement: repeats a number computed earlier, with no new arithmetic.
 - other: anything else.
 
-For computation steps:
-- expression: a Python arithmetic expression with only numbers, + - * / and parentheses, that
-  reproduces the step's arithmetic as written. Write percents as decimals or /100, as the text does.
-- result: the number the step states as its result, digits only (no $, %, commas or units).
-- inputs: one entry per number in the expression, in order. source is "question" for a number
-  given in the problem (including a percent written as a decimal), "step" with "step" set to the
-  0-based index of the earlier step whose result it is, or "constant" for a fixed fact or a number
-  introduced on the spot (60 minutes per hour, 2 for "twice", the 1 in 1 - 0.20).
-For restatement steps: expression null, result the repeated number, and one input with source
-"step" pointing at the step it repeats.
-For setup, plan and other steps: expression null, result null, inputs [].
+For every computation step set equation_explicit:
+- true if the quote itself shows the arithmetic (operators, "=", or a clear inline calculation).
+- false if the quote only states the result (e.g. "The Lyft ride costs $19." or
+  "Betty works for 3 hours") with no operation written. Do NOT invent an expression for these.
+
+When equation_explicit is true:
+- expression: a Python arithmetic expression with only numbers, + - * / and parentheses, copying
+  the arithmetic as written. Write percents as decimals or /100, as the text does.
+- rounding: null if the stated result equals the expression exactly; otherwise "floor", "ceil",
+  or "round" when the text truncates or rounds (e.g. how many whole boats fit).
+- result: the number the step states, digits only (no $, %, commas or units).
+- inputs: one entry per number in the expression, in order.
+When equation_explicit is false:
+- expression null, rounding null, result the stated number.
+- inputs may still list the numbers that produce this result (so the dependency
+  chain is recoverable), even though the equation is not written. Use [] only when
+  the quote merely asserts a number with no clear precursors.
+
+Input sources:
+- "question": a number that appears in the PROBLEM (digits or number words such as "two",
+  "million", "20%").
+- "step": an earlier step's result. Prefer the earliest computation that produced that value,
+  not a later restatement of it.
+- "constant": only when a word in the PROBLEM or this step's quote licenses it: 2 for half/twice,
+  3 for third/thrice, 4 for quarter, 12 for dozen, 7 for week, 60 for minutes/hours, 24 for
+  hours/day, 100 for percent, or the structural 1 in complements such as 1 - 0.20. Do not mark a
+  number as constant if it appears in the problem.
+
+For restatement steps: equation_explicit false, expression null, rounding null, result the
+repeated number, and one input with source "step" pointing at the earliest computation that
+produced it.
+For setup, plan and other steps: equation_explicit false, expression null, rounding null,
+result null, inputs [].
 """
 
 SCHEMA = {
@@ -54,11 +77,13 @@ SCHEMA = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["quote", "role", "expression", "result", "inputs"],
+                "required": ["quote", "role", "equation_explicit", "expression", "rounding", "result", "inputs"],
                 "properties": {
                     "quote": {"type": "string"},
                     "role": {"type": "string", "enum": list(ROLES)},
+                    "equation_explicit": {"type": "boolean"},
                     "expression": {"type": ["string", "null"]},
+                    "rounding": {"type": ["string", "null"], "enum": list(ROUNDINGS) + [None]},
                     "result": {"type": ["string", "null"]},
                     "inputs": {
                         "type": "array",
@@ -80,7 +105,24 @@ SCHEMA = {
 }
 
 NUMBER = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?")
-PERCENT = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(?:%|percent)")
+PERCENT = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(?:%|percent)", re.I)
+WORD_NUMBER = re.compile(
+    r"\b(?:"
+    r"zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|dozen|"
+    r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|"
+    r"twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|"
+    r"hundred|thousand|million"
+    r")\b",
+    re.I,
+)
+WORD_VALUES = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "dozen": 12,
+    "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+    "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90, "hundred": 100,
+    "thousand": 1000, "million": 1_000_000,
+}
 
 
 def user_message(question, solution):
@@ -99,14 +141,54 @@ def same(a, b):
 
 
 def numbers_in(text):
-    """(value, start, end) for every number in text."""
+    """(value, start, end) for every digit number in text."""
     return [(to_float(m.group()), m.start(), m.end()) for m in NUMBER.finditer(text)]
+
+
+def word_numbers_in(text):
+    """Values for number words in text (two, million, ...)."""
+    return [float(WORD_VALUES[m.group().lower()]) for m in WORD_NUMBER.finditer(text)]
 
 
 def question_values(question):
     values = [v for v, _, _ in numbers_in(question) if v is not None]
+    values += word_numbers_in(question)
     values += [to_float(m.group(1)) / 100 for m in PERCENT.finditer(question)]
+    # "1 million" / "1,000,000" style: digit times a scale word nearby is already covered
+    # separately; also accept digit*million when both appear.
+    if re.search(r"\bmillion\b", question, re.I):
+        for v, _, _ in numbers_in(question):
+            if v is not None and v < 1000:
+                values.append(v * 1_000_000)
     return values
+
+
+def licensed_constants(text, qvals=()):
+    """Constants a word in text may introduce (half -> 2, thrice -> 3, ...)."""
+    t = text.lower()
+    out = {1.0}  # structural complement, e.g. 1 - 0.20
+    if re.search(r"\bhalf\b|\bhalves\b|\btwice\b|\bdouble\b", t):
+        out.add(2.0)
+    if re.search(r"\bthrice\b|\bthird\b|\bthirds\b", t):
+        out.add(3.0)
+    if re.search(r"\bquarter\b|\bquarters\b|\bfourth\b", t):
+        out.add(4.0)
+    if re.search(r"\bdozen\b", t):
+        out.add(12.0)
+    if re.search(r"\bweek\b|\bweeks\b", t):
+        out.add(7.0)
+    if re.search(r"\bminute\b|\bminutes\b|\bhour\b|\bhours\b", t):
+        out.add(60.0)
+    if re.search(r"\bday\b|\bdays\b|\bhour\b|\bhours\b", t):
+        out.add(24.0)
+    if re.search(r"%|\bpercent\b", t):
+        out.add(100.0)
+    # Complements of rates from the problem: 20% -> 0.20 and 0.80.
+    for v in qvals:
+        if v is not None and 0 < abs(v) < 1:
+            out.add(1.0 - v)
+            out.add(abs(v))
+    return out
 
 
 _OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv}
@@ -127,13 +209,23 @@ def safe_eval(expression):
     return ev(ast.parse(expression.replace(",", ""), mode="eval"))
 
 
-def matches_rounded(value, stated):
-    """True if `value` rounds to the stated result at the stated number of decimals."""
+def apply_rounding(value, rounding):
+    if rounding is None:
+        return value
+    if rounding == "floor":
+        return math.floor(value)
+    if rounding == "ceil":
+        return math.ceil(value)
+    if rounding == "round":
+        return float(round(value))
+    raise ValueError(f"unknown rounding {rounding!r}")
+
+
+def matches_result(value, stated, rounding):
     target = to_float(stated)
     if target is None:
         return False
-    decimals = len(stated.split(".")[1]) if "." in stated else 0
-    return abs(value - target) <= 0.5 * 10 ** -decimals + 1e-9 or same(value, target)
+    return same(apply_rounding(value, rounding), target)
 
 
 def locate(text, quote, cursor):
@@ -148,11 +240,25 @@ def locate(text, quote, cursor):
     return (m.start(), m.end()) if m else None
 
 
+def computation_producers(steps, results, before, value):
+    """Earlier computation steps whose result equals value."""
+    return [
+        k for k in range(before)
+        if steps[k]["role"] == "computation" and same(results[k], value)
+    ]
+
+
+def earliest_producer(steps, results, before, value):
+    found = computation_producers(steps, results, before, value)
+    return found[0] if found else None
+
+
 def verify(question, text, gold, steps):
     """Check an extraction against the trace. Returns spans, links and the answer chain.
 
     `errors` are failures the LLM should fix on a retry; `flags` are properties of the trace
     (ambiguous links, answer missing from the reasoning) that a retry cannot change.
+    Step links that point at a restatement are rewritten to the earliest computation producer.
     """
     errors, flags = [], []
     spans, cursor = [], 0
@@ -168,28 +274,51 @@ def verify(question, text, gold, steps):
     qvals = question_values(question)
     results = [to_float(s["result"]) if s["result"] is not None else None for s in steps]
     links = []
+
     for i, s in enumerate(steps):
         role = s["role"]
+        explicit = bool(s.get("equation_explicit"))
+        rounding = s.get("rounding")
+        quote = s["quote"]
+        allowed_const = licensed_constants(question + " " + quote, qvals)
+
         if role == "computation":
-            if s["expression"] is None or s["result"] is None:
-                errors.append(f"step {i}: computation needs an expression and a result")
+            if s["result"] is None:
+                errors.append(f"step {i}: computation needs a result")
+            elif explicit:
+                if s["expression"] is None:
+                    errors.append(f"step {i}: explicit computation needs an expression")
+                elif rounding not in (None, *ROUNDINGS):
+                    errors.append(f"step {i}: rounding must be null, floor, ceil, or round")
+                else:
+                    try:
+                        value = safe_eval(s["expression"])
+                        if not matches_result(value, s["result"], rounding):
+                            shown = apply_rounding(value, rounding)
+                            errors.append(
+                                f"step {i}: {s['expression']} = {value:g}"
+                                + (f" ({rounding} -> {shown:g})" if rounding else "")
+                                + f", not {s['result']}"
+                            )
+                    except (ValueError, SyntaxError, ZeroDivisionError) as e:
+                        errors.append(f"step {i}: cannot evaluate expression ({e})")
+                    expr_vals = sorted(v for v, _, _ in numbers_in(s["expression"]) if v is not None)
+                    in_vals = sorted(v for v in (to_float(x["value"]) for x in s["inputs"]) if v is not None)
+                    if len(expr_vals) != len(in_vals) or not all(map(same, expr_vals, in_vals)):
+                        errors.append(f"step {i}: inputs must list every number in the expression once")
             else:
-                try:
-                    value = safe_eval(s["expression"])
-                    if not matches_rounded(value, s["result"]):
-                        errors.append(f"step {i}: {s['expression']} = {value:g}, not {s['result']}")
-                except (ValueError, SyntaxError, ZeroDivisionError) as e:
-                    errors.append(f"step {i}: cannot evaluate expression ({e})")
-                    value = None
-                expr_vals = sorted(v for v, _, _ in numbers_in(s["expression"]) if v is not None)
-                in_vals = sorted(v for v in (to_float(x["value"]) for x in s["inputs"]) if v is not None)
-                if len(expr_vals) != len(in_vals) or not all(map(same, expr_vals, in_vals)):
-                    errors.append(f"step {i}: inputs must list every number in the expression once")
+                if s["expression"] is not None:
+                    errors.append(f"step {i}: result-only computation must not invent an expression")
+                if rounding is not None:
+                    errors.append(f"step {i}: result-only computation must have null rounding")
         elif role == "restatement":
+            if explicit or s["expression"] is not None or rounding is not None:
+                errors.append(f"step {i}: a restatement is result-only with no expression")
             if s["result"] is None or len(s["inputs"]) != 1 or s["inputs"][0]["source"] != "step":
                 errors.append(f"step {i}: a restatement needs a result and one input from a step")
-        elif s["inputs"] or s["result"] is not None:
-            errors.append(f"step {i}: {role} steps take no inputs or result")
+        else:
+            if explicit or s["inputs"] or s["result"] is not None or s["expression"] is not None:
+                errors.append(f"step {i}: {role} steps take no equation, inputs or result")
 
         if role in REMOVABLE_ROLES and spans[i] is not None and results[i] is not None:
             lo, hi = spans[i]
@@ -199,19 +328,46 @@ def verify(question, text, gold, steps):
         for j, inp in enumerate(s["inputs"]):
             v = to_float(inp["value"])
             from_q = any(same(v, q) for q in qvals)
-            from_steps = [k for k in range(i) if same(v, results[k])]
-            link = {"step": i, "input": j, "value": v, "source": inp["source"], "from": inp["step"],
-                    "ambiguous": from_q + len(from_steps) > 1}
+            producers = computation_producers(steps, results, i, v)
+            producer = producers[0] if producers else None
+            # Ambiguity only when two different computations produce this value.
+            ambiguous = len(producers) > 1
+            chosen = inp["step"]
+            resolved = chosen
+            if inp["source"] == "step" and producer is not None:
+                if chosen in producers:
+                    resolved = chosen  # keep LLM's choice among true producers
+                else:
+                    # Restatement or wrong index: rewrite to earliest producer.
+                    resolved = producer
+                    inp["step"] = producer
+            link = {
+                "step": i, "input": j, "value": v, "source": inp["source"], "from": resolved,
+                "ambiguous": ambiguous,
+            }
             if inp["source"] == "question" and not from_q:
                 errors.append(f"step {i}: input {inp['value']} is not a number in the problem")
             elif inp["source"] == "step":
-                k = inp["step"]
+                k = resolved
                 if k is None or not 0 <= k < i or not same(v, results[k]):
-                    errors.append(f"step {i}: input {inp['value']} is not the result of step {k}")
-            elif inp["source"] == "constant" and from_steps:
-                flags.append(f"step {i}: constant {inp['value']} equals the result of step {from_steps[-1]}")
-            if link["ambiguous"]:
-                flags.append(f"step {i}: input {inp['value']} matches several sources")
+                    errors.append(f"step {i}: input {inp['value']} is not the result of an earlier computation")
+                elif steps[k]["role"] != "computation":
+                    errors.append(f"step {i}: input {inp['value']} must link to a computation, not step {k}")
+            elif inp["source"] == "constant":
+                if from_q:
+                    errors.append(f"step {i}: input {inp['value']} appears in the problem; use source question")
+                elif not any(same(v, c) for c in allowed_const):
+                    errors.append(
+                        f"step {i}: constant {inp['value']} is not licensed by the problem or quote wording"
+                    )
+                elif producers:
+                    flags.append(
+                        f"step {i}: constant {inp['value']} also equals computation step {producers[0]}"
+                    )
+            if ambiguous:
+                flags.append(
+                    f"step {i}: input {inp['value']} matches computations {producers}"
+                )
             links.append(link)
 
     g = to_float(gold)

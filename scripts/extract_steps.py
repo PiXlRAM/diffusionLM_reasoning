@@ -107,11 +107,17 @@ def review_entry(model, qid, trace, steps, check):
             tags.append("FINAL")
         if i in check["chain"]:
             tags.append("chain")
-        line = f"{i}. **{s['role']}**{' [' + ', '.join(tags) + ']' if tags else ''}: \"{s['quote']}\""
-        if s["expression"]:
-            line += f"  \n   `{s['expression']} = {s['result']}`"
+        kind = "explicit" if s.get("equation_explicit") else "result-only"
+        line = (
+            f"{i}. **{s['role']}** ({kind})"
+            f"{' [' + ', '.join(tags) + ']' if tags else ''}: \"{s['quote']}\""
+        )
+        if s.get("expression"):
+            round_tag = f" {s['rounding']}" if s.get("rounding") else ""
+            line += f"  \n   `{s['expression']} = {s['result']}`{round_tag}"
         elif s["result"] is not None:
-            line += f"  \n   repeats {s['result']}"
+            label = "repeats" if s["role"] == "restatement" else "states"
+            line += f"  \n   {label} {s['result']}"
         srcs = [
             f"{x['value']} from {'step ' + str(x['step']) if x['source'] == 'step' else x['source']}"
             for x in s["inputs"]
