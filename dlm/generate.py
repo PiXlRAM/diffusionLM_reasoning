@@ -14,6 +14,9 @@ from dlm.config import (
 from dlm.data import extract_number, split_at_first_answer, split_generation
 
 
+STRIP_MODES = ("cut_sentence", "keep_operation")
+
+
 def trace_path(model, split):
     """Trace file named by a hash of everything that shapes generation, so configs never mix."""
     fields = {"revision": MODELS[model]["revision"], "prompt": PROMPT_TEMPLATE, "gen": GENERATION[model]}
@@ -23,8 +26,24 @@ def trace_path(model, split):
     return TRACES_DIR / f"{model}_{split}_{tag}.jsonl"
 
 
-def load_traces(model, split):
-    with trace_path(model, split).open() as f:
+def rebuilt_trace_path(model, split, strip_mode):
+    """Traces with reasoning rebuilt from raw under a strip mode (see scripts.rebuild_reasoning)."""
+    return TRACES_DIR / "rebuilt" / f"{model}_{split}_{strip_mode}.jsonl"
+
+
+def load_traces(model, split, strip_mode="cut_sentence"):
+    """Load traces. cut_sentence uses the original generation files; other modes need rebuild."""
+    if strip_mode not in STRIP_MODES:
+        raise ValueError(f"unknown strip_mode {strip_mode!r}; expected one of {STRIP_MODES}")
+    if strip_mode == "cut_sentence":
+        path = trace_path(model, split)
+    else:
+        path = rebuilt_trace_path(model, split, strip_mode)
+        if not path.exists():
+            raise FileNotFoundError(
+                f"missing {path}; run: python -m scripts.rebuild_reasoning --split {split}"
+            )
+    with path.open() as f:
         return {r["qid"]: r for r in map(json.loads, f)}
 
 

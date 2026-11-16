@@ -76,27 +76,38 @@ class Runner:
         return order, curve
 
 
+def exp1_dir(strip_mode):
+    """Original runs stay in results/exp1; revised strip writes to results/exp1_<mode>."""
+    return RESULTS_DIR / "exp1" if strip_mode == "cut_sentence" else RESULTS_DIR / f"exp1_{strip_mode}"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", choices=list(MODELS), required=True)
     parser.add_argument("--condition", required=True)
     parser.add_argument("--split", default="test")
     parser.add_argument("--n", type=int, default=None, help="limit the number of questions")
+    parser.add_argument(
+        "--strip-mode",
+        default="cut_sentence",
+        choices=("cut_sentence", "keep_operation"),
+        help="reasoning/answer split; keep_operation is the strip-sensitivity condition",
+    )
     args = parser.parse_args()
 
     kind = MODELS[args.model]["kind"]
     if args.condition not in CONDITIONS[kind]:
         raise SystemExit(f"{args.model} supports {CONDITIONS[kind]}")
     qids = load_both_correct(args.split)[: args.n]
-    traces = load_traces(args.model, args.split)
-    out_dir = RESULTS_DIR / "exp1"
+    traces = load_traces(args.model, args.split, strip_mode=args.strip_mode)
+    out_dir = exp1_dir(args.strip_mode)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{args.model}_{args.condition}_{args.split}.jsonl"
     done = {json.loads(l)["qid"] for l in out_path.open()} if out_path.exists() else set()
 
     cache = PassCache(CACHE_DIR / f"{args.model}.sqlite")
     scorer = Scorer(args.model, cache=cache)
-    print(f"{args.model}/{args.condition}/{args.split}: {len(done)} done, "
+    print(f"{args.model}/{args.condition}/{args.split}/{args.strip_mode}: {len(done)} done, "
           f"{len(qids) - len(done & set(qids))} to go -> {out_path}")
     with out_path.open("a") as out:
         for i, qid in enumerate(q for q in qids if q not in done):
@@ -113,6 +124,7 @@ def main():
             rand = run.ordered_curve(shuffled)
             record = {
                 "qid": qid, "model": args.model, "condition": args.condition,
+                "strip_mode": args.strip_mode,
                 "estimator": scorer.default_estimator, "n_tokens": len(item.reasoning),
                 "chunks": run.chunks, "base": base, "greedy_order": order, "greedy": greedy,
                 "truncation": truncation, "random_order": shuffled, "random": rand,

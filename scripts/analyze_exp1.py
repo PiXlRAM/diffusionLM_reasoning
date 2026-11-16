@@ -18,15 +18,17 @@ import random
 from statistics import mean, median
 
 from dlm.config import RESULTS_DIR
+from scripts.exp1_deletion import exp1_dir
 
 THRESHOLD = 0.9
 MIN_BASE = 0.5
 GRID = [i / 20 for i in range(21)]
 
 
-def load(split):
+def load(split, strip_mode="cut_sentence"):
     runs = {}
-    for path in sorted((RESULTS_DIR / "exp1").glob(f"*_{split}.jsonl")):
+    folder = exp1_dir(strip_mode)
+    for path in sorted(folder.glob(f"*_{split}.jsonl")):
         model, condition = path.stem.rsplit("_", 1)[0].split("_", 1)
         runs[(model, condition)] = {r["qid"]: r for r in map(json.loads, path.open())}
     return runs
@@ -85,11 +87,16 @@ def paired(label, a, b, metric, qids):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--split", default="test")
+    parser.add_argument(
+        "--strip-mode",
+        default="cut_sentence",
+        choices=("cut_sentence", "keep_operation"),
+    )
     args = parser.parse_args()
 
-    runs = load(args.split)
+    runs = load(args.split, strip_mode=args.strip_mode)
     if not runs:
-        raise SystemExit("no Experiment 1 results found")
+        raise SystemExit(f"no Experiment 1 results found under {exp1_dir(args.strip_mode)}")
     stats = {key: {q: summarize(r) for q, r in recs.items()} for key, recs in runs.items()}
     base = {}
     for (model, _), recs in runs.items():
@@ -98,6 +105,7 @@ def main():
     models = sorted(base)
     complete = set.intersection(*(set(s) for s in stats.values()))
     high = {q for q in complete if all(base[m].get(q, 0) >= MIN_BASE for m in models)}
+    print(f"strip_mode={args.strip_mode}")
     print(f"runs: {', '.join(f'{m}/{c} ({len(s)})' for (m, c), s in sorted(stats.items()))}")
     print(f"questions in every run: {len(complete)}; baseline >= {MIN_BASE} for all models: {len(high)}\n")
 
@@ -134,7 +142,9 @@ def main():
                     paired(label, stats[a], stats[b], metric, qids)
         print()
 
-    out = RESULTS_DIR / "exp1" / "mean_curves.csv"
+    out_dir = exp1_dir(args.strip_mode)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / "mean_curves.csv"
     with out.open("w") as f:
         f.write("run,order,fraction_removed,mean_ratio,subset\n")
         for subset_name, qids in (("high", sorted(high)), ("all", sorted(complete))):
